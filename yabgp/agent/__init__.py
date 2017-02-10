@@ -193,6 +193,7 @@ def prepare_twisted_service():
             myaddr=CONF.bgp.running_config[peer]['local_addr'],
             peerasn=CONF.bgp.running_config[peer]['remote_as'],
             peeraddr=CONF.bgp.running_config[peer]['remote_addr'],
+            peerport=CONF.bgp.running_config[peer]['remote_port'],
             tag=CONF.bgp.running_config[peer]['tag'],
             afisafi=CONF.bgp.running_config[peer]['afi_safi'],
             msgpath=msg_file_path_for_peer,

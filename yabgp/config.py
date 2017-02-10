@@ -93,6 +93,9 @@ bgp_peer_conf_cli_opts = [
                help='The Local BGP AS number'),
     cfg.IPOpt('remote_addr',
               help='The remote address of the peer'),
+    cfg.IntOpt('remote_port',
+               default=179,
+               help='The remote port of the peer'),
     cfg.IPOpt('local_addr',
               default='0.0.0.0',
               help='The local address of the BGP'),
@@ -132,6 +135,7 @@ def get_bgp_config():
             CONF.bgp.running_config[CONF.bgp.remote_addr] = {
                 'remote_as': CONF.bgp.remote_as,
                 'remote_addr': CONF.bgp.remote_addr,
+                'remote_port': CONF.bgp.remote_port,
                 'local_as': CONF.bgp.local_as,
                 'local_addr': CONF.bgp.local_addr,
                 'md5': CONF.bgp.md5,

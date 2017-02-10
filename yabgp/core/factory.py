@@ -75,8 +75,9 @@ class BGPPeering(BGPFactory):
     One connection, One BGPPeering class.
     """
 
-    def __init__(self, myasn=None, myaddr=None, peerasn=None, peeraddr=None, tag=None,
-                 msgpath=None, afisafi=None, md5=None, channel=None, mongo_conn=None):
+    def __init__(self, myasn=None, myaddr=None, peerasn=None, peeraddr=None,
+                 peerport=None, tag=None, msgpath=None, afisafi=None, md5=None,
+                 channel=None, mongo_conn=None):
         """Initial a BGPPeering instance.
 
         :param myasn: local bgp as number.
@@ -94,6 +95,9 @@ class BGPPeering(BGPFactory):
         self.my_asn = myasn
         self.my_addr = myaddr
         self.peer_addr = peeraddr
+        self.peer_port = peerport
+        if self.peer_port is None:
+            self.peer_port = bgp_cons.PORT
         self.peer_id = None
         self.bgp_id = None
         self.peer_asn = peerasn
@@ -338,7 +342,7 @@ class BGPPeering(BGPFactory):
 
             connector = reactor.connectTCP(
                 host=self.peer_addr,
-                port=bgp_cons.PORT,
+                port=self.peer_port,
                 factory=self,
                 timeout=30,
                 bindAddress=(self.my_addr, 0))
