@@ -65,12 +65,12 @@ class TestMpUnReachNLRI(unittest.TestCase):
 
     def test_ipv4_flowspec_parse(self):
         data_bin = b'\x00\x01\x85\x0a\x01\x18\xc0\x55\x02\x02\x18\xc0\x55\x01'
-        nlri_dict = {'afi_safi': (1, 133), 'withdraw': [{1: '192.85.2.0/24'}, {2: '192.85.1.0/24'}]}
+        nlri_dict = {'afi_safi': (1, 133), 'withdraw': [{1: '192.85.2.0/24', 2: '192.85.1.0/24'}]}
         self.assertEqual(nlri_dict, MpUnReachNLRI.parse(data_bin))
 
     def test_ipv4_flowspec_construct(self):
         data_bin = b'\x00\x01\x85\x0a\x01\x18\xc0\x55\x02\x02\x18\xc0\x55\x01'
-        nlri_dict = {'afi_safi': (1, 133), 'withdraw': [{1: '192.85.2.0/24'}, {2: '192.85.1.0/24'}]}
+        nlri_dict = {'afi_safi': (1, 133), 'withdraw': [{1: '192.85.2.0/24', 2: '192.85.1.0/24'}]}
         self.assertEqual(data_bin, MpUnReachNLRI.construct(nlri_dict)[3:])
 
     def test_l2vpn_evpn_route_type_1_parse_construct(self):
@@ -135,6 +135,24 @@ class TestMpUnReachNLRI(unittest.TestCase):
         }
         self.assertEqual(data_dict, MpUnReachNLRI.parse(MpUnReachNLRI.construct(data_dict)[3:]))
 
+    def test_ipv4_labeled_unicast_parse_construct(self):
+        data_dict = {
+            "afi_safi": (1, 4),
+            "withdraw": [
+                {'prefix': '34.1.41.0/24', 'label': [321]},
+                {'prefix': '34.1.42.0/24', 'label': [322]}]
+        }
+        self.assertEqual(data_dict, MpUnReachNLRI.parse(MpUnReachNLRI.construct(data_dict)[3:]))
+
+    def test_ipv6_labeled_unicast_parse_construct(self):
+        data_dict = {
+            'afi_safi': (2, 4),
+            'withdraw': [
+                {'label': [91], 'prefix': '2001:2121::1/128'},
+                {'label': [92], 'prefix': '::2001:2121:1:0/64'},
+                {'label': [93], 'prefix': '2001:4837:1821::2/127'}]
+        }
+        self.assertEqual(data_dict, MpUnReachNLRI.parse(MpUnReachNLRI.construct(data_dict)[3:]))
 
 if __name__ == '__main__':
     unittest.main()

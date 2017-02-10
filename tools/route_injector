@@ -22,14 +22,17 @@
 import sys
 import urllib2
 import json
+import time
 
 from oslo_config import cfg
 
 
 CONF = cfg.CONF
 
-CONF.register_cli_opt(
-    cfg.StrOpt('peerip', help='The BGP peer address'))
+CONF.register_cli_opts([
+    cfg.StrOpt('peerip', help='The BGP peer address'),
+    cfg.IntOpt('interval',default=0, help='time interval when sending message')]
+)
 
 rest_server_ops = [
     cfg.StrOpt('host',
@@ -117,21 +120,44 @@ def get_data_from_agent(url, username, password, method='GET', data=None):
     opener_v1 = get_api_opener_v1(url, username, password)
     try:
         res = json.loads(opener_v1.open(request).read())
-        return res
-    except Exception as e:
-        print(e)
-    return None
+        return True
+    except Exception:
+        return False
+
+
+def interval():
+    time.sleep(CONF.interval)
+
+
+def linecount():
+    count = 0
+    with open(CONF.message.json) as f:
+        for line in f.xreadlines():
+            count += 1
+    return count
 
 
 def send_update():
-    # get the message file
+    # get the message count
+    message_count = float(linecount())
     url = 'http://{bind_host}:{bind_port}/v1/peer/{peer_ip}/send/update'
     url = url.format(bind_host=CONF.rest.host, bind_port=CONF.rest.port, peer_ip=CONF.peerip)
-    for message in open(CONF.message.json).readlines():
-        if CONF.message.json:
-            message = json.loads(message)
-            if message['type'] != 2:
+    bar_length = 50
+    message_pass_send = 0
+    send_success = 0
+    send_failed = 0
+    current_percent = 0.00
+    percent_step = 0.01
+    with open(CONF.message.json) as f:
+        sys.stdout.write("\rPercent: [%s] %.2f%%" % ('' + ' ' * bar_length, current_percent))
+        current_percent += percent_step
+        sys.stdout.flush()
+        for _message in f.xreadlines():
+            message_json = json.loads(_message)
+            if message_json['type'] != 2:
+                message_count -= 1
                 continue
+            message = message_json['msg']
             if message['nlri']:
                 if CONF.attribute.no_origin_cluster:
                     if message['attr'].get('9'):
@@ -145,7 +171,30 @@ def send_update():
                     'nlri': message['nlri'],
                     'attr': message['attr']
                 }
-                get_data_from_agent(url, 'admin', 'admin', 'POST', post_data)
+                res = get_data_from_agent(url, 'admin', 'admin', 'POST', post_data)
+                if res:
+                    send_success += 1
+                    interval()
+                else:
+                    send_failed += 1
+                while message_pass_send/message_count >= current_percent/100:
+                    hashes = '#' * int(message_pass_send/message_count * bar_length)
+                    spaces = ' ' * (bar_length - len(hashes))
+                    sys.stdout.write("\rPercent: [%s] %.2f%%" % (hashes + spaces, current_percent))
+                    sys.stdout.flush()
+                    current_percent += percent_step
+                message_pass_send += 1
+            else:
+                # TODO support other address family
+                message_count -= 1
+                continue
+    hashes = '#' * bar_length
+    spaces = ''
+    sys.stdout.write("\rPercent: [%s] %.2f%%"%(hashes + spaces, 100.00))
+    sys.stdout.flush()
+    print '\nTotal messages:   %s' % int(message_count)
+    print 'Success send out: %s' % send_success
+    print 'Failed send out:  %s' % send_failed
 
 if __name__ == '__main__':
 

@@ -19,10 +19,13 @@ import logging
 import traceback
 import struct
 import time
+import copy
+import json
 
 import netaddr
 from oslo_config import cfg
 from twisted.internet import protocol
+from twisted.internet import reactor
 
 from yabgp.common import constants as bgp_cons
 from yabgp.message.open import Open
@@ -119,7 +122,8 @@ class BGP(protocol.Protocol):
 
         # send msg to rabbit mq
         if not CONF.standalone and self.factory.tag in \
-                [channel_cons.SOURCE_ROUTER_TAG, channel_cons.SOURCE_AND_TARGET_ROUTER_TAG]:
+                [channel_cons.SOURCE_ROUTER_TAG,
+                 channel_cons.SOURCE_AND_TARGET_ROUTER_TAG, channel_cons.TARGET_ROUTER_TAG]:
             agent_id = "%s:%s" % (CONF.rest.bind_host, CONF.rest.bind_port)
             send_to_channel_msg = {
                 'agent_id': agent_id,
@@ -127,7 +131,7 @@ class BGP(protocol.Protocol):
                 'msg': None
             }
             self.factory.channel.send_message(
-                exchange='', routing_key=self.factory.peer_addr, message=str(send_to_channel_msg))
+                exchange='', routing_key=self.factory.peer_addr, message=send_to_channel_msg)
         # Don't do anything if we closed the connection explicitly ourselves
         if self.disconnected:
             self.factory.connection_closed(self)
@@ -181,6 +185,29 @@ class BGP(protocol.Protocol):
                 self._adj_rib_in['ipv4'].pop(prefix)
             else:
                 LOG.warning('withdraw prefix which does not exist in rib table!')
+        # for none ipv4 address family
+        mpreach_dict = msg['attr'].get(14) or {}
+        afi_safi = mpreach_dict.get('afi_safi')
+        if afi_safi == (1, 133):  # ipv4 flowspec
+            new_attr = copy.copy(msg['attr'])
+            nlri_dict = new_attr.pop(14)
+            new_attr[3] = nlri_dict['nexthop']
+            for prefix in nlri_dict.get('nlri'):
+                prefix = json.dumps(prefix)
+                self._adj_rib_in['flowspec'][str(prefix)] = new_attr
+
+        mpunreach_dict = msg['attr'].get(15) or {}
+        if not mpunreach_dict:
+            return
+        afi_safi = mpunreach_dict.get('afi_safi')
+        if afi_safi == (1, 133):
+            for prefix in mpunreach_dict.get('withdraw'):
+                prefix = json.dumps(prefix)
+                if str(prefix) in self._adj_rib_in['flowspec']:
+                    print str(prefix)
+                    self._adj_rib_in['flowspec'].pop(str(prefix))
+                else:
+                    LOG.warning('withdraw prefix which does not exist in rib table')
 
     def dataReceived(self, data):
 
@@ -302,12 +329,19 @@ class BGP(protocol.Protocol):
             self.msg_recv_stat['Updates'] += 1
             self.fsm.update_received()
             return
-
+        afi_safi = None
         # process messages
+        if result['nlri'] or result['withdraw']:
+            afi_safi = 'ipv4'
+        elif result['attr'].get(14):
+            afi_safi = bgp_cons.AFI_SAFI_DICT[result['attr'][14]['afi_safi']]
+        elif result['attr'].get(15):
+            afi_safi = bgp_cons.AFI_SAFI_DICT[result['attr'][15]['afi_safi']]
         msg = {
             'attr': result['attr'],
             'nlri': result['nlri'],
-            'withdraw': result['withdraw']
+            'withdraw': result['withdraw'],
+            'afi_safi': afi_safi
         }
 
         # write message to disk
@@ -316,9 +350,7 @@ class BGP(protocol.Protocol):
             msg_type=bgp_cons.MSG_UPDATE,
             msg={"msg": msg}
         )
-        if self.factory.flush_and_check_file_size():
-            for afi, safi in CONF.bgp.running_config[self.factory.peer_addr]['capability']['remote']['afi_safi']:
-                self.send_route_refresh(afi=afi, safi=safi)
+        self.factory.flush_and_check_file_size()
 
         # check channel filter
         if not CONF.standalone and self.factory.tag in \
@@ -403,7 +435,7 @@ class BGP(protocol.Protocol):
             }
         if send_to_channel_msg['msg']:
             self.factory.channel.send_message(
-                exchange='', routing_key=self.factory.peer_addr, message=str(send_to_channel_msg))
+                exchange='', routing_key=self.factory.peer_addr, message=send_to_channel_msg)
 
     def send_update(self, msg):
         """
@@ -413,12 +445,15 @@ class BGP(protocol.Protocol):
         """
         try:
             msg_update = Update().construct(msg, self.fourbytesas, self.add_path_ipv4_send)
-            self.transport.write(msg_update)
+            reactor.callFromThread(self.write_tcp_thread, msg_update)
             self.msg_sent_stat['Updates'] += 1
             return True
         except Exception as e:
             LOG.error(e)
             return False
+
+    def write_tcp_thread(self, msg):
+        self.transport.write(msg)
 
     def send_notification(self, error, sub_error, data=b''):
         """
@@ -497,7 +532,7 @@ class BGP(protocol.Protocol):
                     'msg': None
                 }
                 self.factory.channel.send_message(
-                    exchange='', routing_key=self.factory.peer_addr, message=str(send_to_channel_msg))
+                    exchange='', routing_key=self.factory.peer_addr, message=send_to_channel_msg)
 
         LOG.info("[%s]A BGP KeepAlive message was received from peer.", self.factory.peer_addr)
         KeepAlive().parse(msg)
@@ -613,9 +648,9 @@ class BGP(protocol.Protocol):
         :param res: reserve, default is 0
         """
         # check if the peer support route refresh
-        if cfg.CONF.bgp.running_config[self.factory.peer_addr]['capability']['remote']['cisco_route_refresh']:
+        if 'cisco_route_refresh' in cfg.CONF.bgp.running_config[self.factory.peer_addr]['capability']['remote']:
             type_code = bgp_cons.MSG_CISCOROUTEREFRESH
-        elif cfg.CONF.bgp.running_config[self.factory.peer_addr]['capability']['remote']['route_refresh']:
+        elif 'route_refresh' in cfg.CONF.bgp.running_config[self.factory.peer_addr]['capability']['remote']:
             type_code = bgp_cons.MSG_ROUTEREFRESH
         else:
             return False
